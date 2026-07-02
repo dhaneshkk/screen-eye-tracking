@@ -556,6 +556,8 @@ Result sample.
 
 The WebSocket sends a `snapshot` event on connect and `update` events after state changes. The snapshot uses `schema_version: 1` and includes latest-known `runtime`, `display`, `camera`, `gaze`, `calibration`, `models`, `status`, and preview metadata. Preview image data is intentionally omitted from the external snapshot.
 
+https://github.com/user-attachments/assets/345e7fd9-540b-47b5-a2e6-69a25d1e7a54
+
 Snapshot fields are latest-known values. Slices can be `null` before the app has enough data, and fields that are not known yet are omitted from JSON responses.
 
 ```ts
