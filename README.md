@@ -60,6 +60,7 @@ public/models/gaze_Nx3x160x160.onnx
 For `--runtime onnxweb`, also place:
 
 ```text
+public/models/retinaface_mbn025_with_postprocess_480x640_max1000_th0.70.onnx
 public/models/yolomit_t_wholebody28_1x3x480x640.onnx
 public/models/vsdlm_l.onnx
 public/models/gaze_1x3x160x160.onnx
@@ -96,19 +97,51 @@ The default ONNX Runtime backend is TensorRT. If TensorRT is unavailable, the ba
 
 ```bash
 # Recommended
-pnpm dev -- --backend cuda --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
+pnpm dev -- \
+--backend cuda \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5
+
 # Selecting the gaze estimation mode
-pnpm dev -- --backend cuda --calibrate --display-size-inch 31.5
-pnpm dev -- --backend cuda --calibrate --gaze-projection-mode legacy --display-size-inch 31.5
-pnpm dev -- --backend cuda --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
-pnpm dev -- --backend cuda --calibrate --gaze-projection-mode binocular-convergence --display-size-inch 31.5
+pnpm dev -- \
+--backend cuda \
+--calibrate \
+--display-size-inch 31.5
+
+pnpm dev -- \
+--backend cuda \
+--calibrate \
+--gaze-projection-mode legacy \
+--display-size-inch 31.5
+
+pnpm dev -- \
+--backend cuda \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5
+
+pnpm dev -- \
+--backend cuda \
+--calibrate \
+--gaze-projection-mode binocular-convergence \
+--display-size-inch 31.5
 ```
 
 To explicitly use TensorRT or CPU:
 
 ```bash
-pnpm dev -- --backend tensorrt --calibrate --display-size-inch 31.5
-pnpm dev -- --backend cpu --calibrate --display-size-inch 31.5
+pnpm dev -- \
+--backend tensorrt \
+--calibrate \
+--gaze-projection-mode binocular-convergence \
+--display-size-inch 31.5
+
+pnpm dev -- \
+--backend cpu \
+--calibrate \
+--gaze-projection-mode binocular-convergence \
+--display-size-inch 31.5
 ```
 
 ### 2. Web component only ver (Python independent)
@@ -117,9 +150,20 @@ To run inference fully in Electron without starting Python:
 
 ```bash
 # onnxruntime-web
-pnpm dev -- --runtime onnxweb --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
+pnpm dev -- \
+--runtime onnxweb \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
+
 # LiteRT.js
-pnpm dev -- --runtime litert --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
+pnpm dev -- \
+--runtime litert \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
 ```
 
 The web runtimes try WebGPU first. If model loading fails, they reload both models with wasm.
@@ -130,9 +174,30 @@ When a web runtime is selected, Electron uses the selected model files in `publi
 If you specify `yolo` for `--detector` and also specify `--enable-lip-motion`, you can try out a feature that emulates a left mouse click action by opening and closing your mouth. Your gaze moves frequently and unconsciously, so clicking in the exact right position will require miraculous skill.
 
 ```bash
-pnpm dev -- --backend cuda --detector yolo --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
-pnpm dev -- --runtime onnxweb --detector yolo --enable-lip-motion --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
-pnpm dev -- --runtime litert --detector yolo --enable-lip-motion --calibrate --gaze-projection-mode binocular-screen --display-size-inch 31.5
+pnpm dev -- \
+--backend cuda \
+--detector yolo \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5
+
+pnpm dev -- \
+--runtime onnxweb \
+--detector yolo \
+--enable-lip-motion \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
+
+pnpm dev -- \
+--runtime litert \
+--detector yolo \
+--enable-lip-motion \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
 ```
 
 <img width="600" alt="LipMotion" src="https://github.com/user-attachments/assets/9f256287-cf8e-4b1b-9770-3b3c04373911" />
@@ -198,9 +263,29 @@ The PiP preview in the upper-right corner shows the camera image and detection s
 External API access is disabled unless `--external-api` is passed. When enabled, the Electron main process exposes the latest internal state for local applications:
 
 ```bash
-pnpm dev -- --backend cuda --external-api --calibrate --gaze-projection-mode binocular-screen
-pnpm dev -- --runtime onnxweb --external-api --calibrate --gaze-projection-mode binocular-screen
-pnpm dev -- --runtime litert --external-api --calibrate --gaze-projection-mode binocular-screen
+pnpm dev -- \
+--backend cuda \
+--external-api \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
+
+pnpm dev -- \
+--runtime onnxweb \
+--external-api \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
+
+pnpm dev -- \
+--runtime litert \
+--external-api \
+--calibrate \
+--gaze-projection-mode binocular-screen \
+--display-size-inch 31.5 \
+--web-inference-worker dedicated
 ```
 
 HTTP endpoints:
@@ -438,6 +523,36 @@ Result sample.
 }
 ```
 
+When you want to reference only the value of `snapshot.gaze`.
+
+```bash
+websocat ws://127.0.0.1:47892/events | jq ".snapshot.gaze"
+```
+
+Result sample.
+
+```json
+{
+  "x_norm": 0.11871259729371653,
+  "y_norm": 0.9999610338958298,
+  "raw_x_norm": 0.3875164253126151,
+  "raw_y_norm": 0.19849362020119093,
+  "x_px": 2863.9042490719144,
+  "y_px": 1439.9438888099949,
+  "confidence": 0.9965733289718628,
+  "distance_m": 0.4088227492034837,
+  "head_face_width_ratio": 1.545,
+  "eye_position_weight_x": 1,
+  "eye_position_weight_y": 0.25,
+  "gaze_projection_mode": "binocular-screen",
+  "detect_inference_ms": 26,
+  "gaze_inference_ms": 15.600000001490116,
+  "inference_ms": 41.600000001490116,
+  "yaw_deg": 6.016508449224943,
+  "pitch_deg": -7.327657436482831,
+  "updated_at": "2026-07-02T23:43:06.135Z"
+}
+```
 
 The WebSocket sends a `snapshot` event on connect and `update` events after state changes. The snapshot uses `schema_version: 1` and includes latest-known `runtime`, `display`, `camera`, `gaze`, `calibration`, `models`, `status`, and preview metadata. Preview image data is intentionally omitted from the external snapshot.
 
