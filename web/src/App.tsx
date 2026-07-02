@@ -76,6 +76,10 @@ function formatMs(value: number | undefined): string | null {
   return value !== undefined && Number.isFinite(value) ? `${value.toFixed(1)}ms` : null;
 }
 
+function formatInferenceTime(value: number | undefined): string | null {
+  return value !== undefined && Number.isFinite(value) ? `${value.toFixed(2)} ms` : null;
+}
+
 function App() {
   const [config, setConfig] = useState<RendererConfig | null>(null);
   const [gaze, setGaze] = useState<GazeState | null>(null);
@@ -93,6 +97,7 @@ function App() {
   const calibrationArrowRef = useRef<HTMLDivElement>(null);
   const calibrationCenterArrowsRef = useRef<HTMLDivElement>(null);
   const calibrationTargetRef = useRef<HTMLDivElement>(null);
+  const inferenceTimeRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLElement>(null);
   const statusRef = useRef<HTMLElement>(null);
   const webRuntimeRef = useRef<WebRuntimeController | null>(null);
@@ -283,6 +288,7 @@ function App() {
 
   const target = calibrationIndex === null || calibrationCountdown !== null ? null : calibrationPoints[calibrationIndex];
   const calibrationActive = calibrationCountdown !== null || calibrationIndex !== null;
+  const inferenceTimeText = config?.enableInferenceTime ? formatInferenceTime(gaze?.inference_ms) : null;
   const isCenterCalibrationTarget =
     target !== null && Math.hypot(target[0] - 0.5, target[1] - 0.5) < 0.05;
   const calibrationArrowStyle = useMemo(() => {
@@ -325,6 +331,7 @@ function App() {
       addElement(calibrationArrowRef.current, 28);
       addElement(calibrationCenterArrowsRef.current, 28);
       addElement(calibrationTargetRef.current, 18);
+      addElement(inferenceTimeRef.current, 18);
       addElement(previewRef.current, 24);
       if (!calibrationActive) {
         addElement(statusRef.current, 18);
@@ -339,7 +346,7 @@ function App() {
       window.clearInterval(intervalId);
       window.removeEventListener("resize", collectRegions);
     };
-  }, [config, gaze, preview, status, statusLevel, calibrationActive, calibrationCountdown, calibrationIndex, target]);
+  }, [config, gaze, preview, status, statusLevel, calibrationActive, calibrationCountdown, calibrationIndex, target, inferenceTimeText]);
 
   return (
     <main className="overlay">
@@ -394,6 +401,11 @@ function App() {
           }}
         >
           <div />
+        </div>
+      )}
+      {inferenceTimeText && (
+        <div ref={inferenceTimeRef} className="inference-time">
+          {inferenceTimeText}
         </div>
       )}
       {preview && !calibrationActive && (

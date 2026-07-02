@@ -507,6 +507,7 @@ function createWindow() {
     invalidDisplay,
     cameraScreenX: Number.isFinite(cameraScreenX) ? Math.min(1, Math.max(0, cameraScreenX)) : 0.5,
     cameraScreenY: Number.isFinite(cameraScreenY) ? Math.min(1, Math.max(0, cameraScreenY)) : 0,
+    enableInferenceTime: hasFlag(args, "--enable-inference-time"),
     webInference: runtime === "python" ? null : webInferenceConfig(args, bounds, runtime)
   };
   gazeStateStore.initialize(rendererConfig, externalStoreInitOptions(args));

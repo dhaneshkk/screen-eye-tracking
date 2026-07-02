@@ -39,6 +39,7 @@ export interface RendererConfig {
   invalidDisplay: boolean;
   cameraScreenX: number;
   cameraScreenY: number;
+  enableInferenceTime: boolean;
   runtime: RuntimeName;
   webInference: WebInferenceConfig | null;
 }
