@@ -48,9 +48,11 @@ export type RuntimeName = "python" | "onnxweb" | "litert";
 export type GazeProjectionMode = "legacy" | "binocular-screen" | "binocular-convergence";
 export type AcceleratorName = "webgpu" | "wasm";
 export type WebAccelerator = AcceleratorName;
+export type WebInferenceWorkerMode = "off" | "ort-proxy" | "dedicated";
 
 export interface WebInferenceConfig {
   runtime: Exclude<RuntimeName, "python">;
+  webInferenceWorker: WebInferenceWorkerMode;
   detector: "retinaface" | "yolo";
   backend: string;
   camera: string;
@@ -74,6 +76,7 @@ export interface WebInferenceConfig {
   lipMotionModelUrl: string;
   onnxWasmBaseUrl: string;
   liteRtWasmBaseUrl: string;
+  assetBaseUrl?: string;
   smoothingAlpha: number;
   smoothingAlphaY: number;
   previewFps: number;
@@ -106,6 +109,12 @@ export type BackendMessage =
       gaze_inference_ms?: number;
       lip_motion_inference_ms?: number;
       inference_ms?: number;
+      capture_ms?: number;
+      preview_ms?: number;
+      frame_interval_ms?: number;
+      processed_fps?: number;
+      dropped_frames?: number;
+      main_thread_long_tasks?: number;
       yaw_deg: number;
       pitch_deg: number;
       mouth_detected?: boolean;

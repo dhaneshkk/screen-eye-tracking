@@ -158,6 +158,11 @@ function resolveRuntime(args) {
   return ["python", "onnxweb", "litert"].includes(runtime) ? runtime : "python";
 }
 
+function readWebInferenceWorkerMode(args) {
+  const mode = readOption(args, "--web-inference-worker", "off");
+  return ["off", "ort-proxy", "dedicated"].includes(mode) ? mode : "off";
+}
+
 function resolveRepoPath(value) {
   const raw = value || "";
   return path.resolve(repoRoot, raw);
@@ -309,6 +314,7 @@ function webInferenceConfig(args, displayBounds, runtime) {
   const enableLipMotion = hasFlag(args, "--enable-lip-motion") && detector === "yolo";
   return {
     runtime,
+    webInferenceWorker: readWebInferenceWorkerMode(args),
     detector,
     backend: readOption(args, "--backend", "tensorrt"),
     camera: readOption(args, "--camera", "0"),

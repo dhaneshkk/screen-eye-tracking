@@ -325,6 +325,25 @@ describe("Gaze output parser", () => {
 });
 
 describe("Calibration", () => {
+  it("uses injected calibration IO without window.gazeBridge", async () => {
+    const read = vi.fn().mockResolvedValue({
+      ok: true,
+      text: JSON.stringify({
+        affine: [
+          [1, 0],
+          [0, 1],
+          [0, 0]
+        ]
+      })
+    });
+    const write = vi.fn().mockResolvedValue({ ok: true, path: ".gaze_calibration.json" });
+    const emit = vi.fn();
+    const calibration = new Calibration(".gaze_calibration.json", emit, { read, write });
+    await calibration.load();
+    expect(read).toHaveBeenCalledWith(".gaze_calibration.json");
+    expect(calibration.apply([0.25, 0.75])).toEqual([0.25, 0.75]);
+  });
+
   it("writes affine-compatible calibration payload", async () => {
     const writeCalibration = vi.fn().mockResolvedValue({ ok: true, path: ".gaze_calibration.json" });
     vi.stubGlobal("window", {

@@ -36,7 +36,12 @@ export interface RuntimeModels {
 let onnxSessionCreateQueue = Promise.resolve();
 let liteRtLoadPromise: Promise<unknown> | null = null;
 
+type LiteRtModuleLocator = {
+  locateFile?: (filename: string, scriptDirectory?: string) => string;
+};
+
 export async function createRuntimeModels(config: WebInferenceConfig, accelerator: WebAccelerator): Promise<RuntimeModels> {
+  runtimeAssetBaseUrl = config.assetBaseUrl ?? globalThis.location.href;
   if (config.runtime === "onnxweb") {
     return createOnnxRuntimeModels(config, accelerator);
   }
@@ -46,6 +51,7 @@ export async function createRuntimeModels(config: WebInferenceConfig, accelerato
 async function createOnnxRuntimeModels(config: WebInferenceConfig, accelerator: WebAccelerator): Promise<RuntimeModels> {
   const ort = await import("onnxruntime-web/webgpu");
   ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = config.webInferenceWorker === "ort-proxy" && accelerator === "wasm";
   ort.env.wasm.wasmPaths = absoluteAssetUrl(config.onnxWasmBaseUrl);
   ort.env.logLevel = "error";
   const providers = [accelerator];
@@ -132,12 +138,14 @@ function createOnnxSessionQueued(
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
 function absoluteAssetUrl(url: string): string {
-  return new URL(url, window.location.href).toString();
+  return new URL(url, runtimeAssetBaseUrl).toString();
 }
+
+let runtimeAssetBaseUrl = globalThis.location.href;
 
 async function createLiteRtModels(config: WebInferenceConfig, accelerator: WebAccelerator): Promise<RuntimeModels> {
   const { Tensor, loadAndCompile, loadLiteRt } = await import("@litertjs/core");
@@ -358,12 +366,21 @@ function ensureLiteRtLoaded(
   wasmBaseUrl: string
 ): Promise<unknown> {
   if (liteRtLoadPromise === null) {
+    installLiteRtFileLocator(wasmBaseUrl);
     liteRtLoadPromise = loadLiteRt(wasmBaseUrl, { threads: false }).catch((error) => {
       liteRtLoadPromise = null;
       throw error;
     });
   }
   return liteRtLoadPromise;
+}
+
+function installLiteRtFileLocator(wasmBaseUrl: string): void {
+  const target = globalThis as typeof globalThis & { Module?: LiteRtModuleLocator };
+  target.Module = {
+    ...(target.Module ?? {}),
+    locateFile: (filename) => new URL(filename, wasmBaseUrl).toString()
+  };
 }
 
 function estimateFromOutput(output: Float32Array, crop: GazeCrop): GazeEstimate {

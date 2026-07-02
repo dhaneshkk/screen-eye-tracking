@@ -174,6 +174,7 @@ pnpm dev -- \
 - `--smoothing-alpha-y`: Vertical gaze marker smoothing. Larger values are steadier but slower. Default: `0.45`.
 - `--preview-fps`: PiP camera preview update FPS. Default: `8`.
 - `--enable-inference-time`: Shows total inference time in the top-left corner as `xx.xx ms`.
+- `--web-inference-worker off|ort-proxy|dedicated`: Experimental web runtime worker mode. Default: `off`. `ort-proxy` only applies to onnxruntime-web wasm inference; `dedicated` moves onnxruntime-web or LiteRT inference processing into a dedicated Worker.
 - `--external-api`: Starts a read-only local HTTP/WebSocket API for external applications. Disabled by default.
 - `--external-api-host`: Host for `--external-api`. Default: `127.0.0.1`.
 - `--external-api-port`: Port for `--external-api`. Default: `47892`.

@@ -9,6 +9,7 @@ import {
   LIP_MOTION_OPEN_THRESHOLD,
   type Detection
 } from "./core";
+import InferenceWorker from "./inferenceWorker.ts?worker";
 import { createRuntimeModels, type RuntimeModels } from "./runtimes";
 
 export interface WebRuntimeController {
@@ -20,6 +21,18 @@ export async function startWebRuntime(
   config: WebInferenceConfig,
   emit: (payload: BackendMessage) => void
 ): Promise<WebRuntimeController> {
+  if (config.webInferenceWorker === "dedicated") {
+    return startDedicatedWorkerRuntime(config, emit);
+  }
+  if (config.webInferenceWorker === "ort-proxy" && config.runtime !== "onnxweb") {
+    emit({
+      type: "status",
+      level: "warning",
+      message: "--web-inference-worker ort-proxy is only supported by onnxweb; using normal renderer inference",
+      runtime: config.runtime,
+      logged: true
+    });
+  }
   let stopped = false;
   let latestRaw: [number, number] | null = null;
   let smoothed: [number, number] | null = null;
@@ -27,8 +40,10 @@ export async function startWebRuntime(
   let models: RuntimeModels | null = null;
   let lastStatus = 0;
   let lastPreview = 0;
+  let lastProcessed = 0;
   let lastProjectionWarning = 0;
   let fallbackInProgress = false;
+  const longTasks = createLongTaskCounter();
 
   const calibration = new Calibration(config.calibrationFile, emit);
   await calibration.load();
@@ -37,9 +52,13 @@ export async function startWebRuntime(
   const previewWidthRatio = config.detector === "retinaface" ? config.retinafaceHeadFaceRatio : null;
 
   try {
+    const useOrtProxy = config.webInferenceWorker === "ort-proxy" && config.runtime === "onnxweb";
     try {
-      models = await createRuntimeModels(config, "webgpu");
+      models = useOrtProxy ? await createRuntimeModels(config, "wasm") : await createRuntimeModels(config, "webgpu");
     } catch (error) {
+      if (useOrtProxy) {
+        throw error;
+      }
       const payload: BackendMessage = {
         type: "status",
         level: "warning",
@@ -107,18 +126,24 @@ export async function startWebRuntime(
         return;
       }
       try {
+        const captureStart = performance.now();
         ctx.drawImage(video, 0, 0, config.cameraWidth, config.cameraHeight);
         const frame = ctx.getImageData(0, 0, config.cameraWidth, config.cameraHeight);
+        const captureMs = performance.now() - captureStart;
         const detectStart = performance.now();
         const { head, eyes, mouth } = await models.detect(frame);
         const detectEnd = performance.now();
         const detectInferenceMs = detectEnd - detectStart;
         const now = detectEnd;
+        const frameIntervalMs = lastProcessed > 0 ? now - lastProcessed : undefined;
+        lastProcessed = now;
+        const processedFps = frameIntervalMs && frameIntervalMs > 0 ? 1000 / frameIntervalMs : undefined;
         const shouldEmitPreview = !config.hidePreview && now - lastPreview >= previewInterval;
+        let previewMs = 0;
         if (head === null || eyes.length < 2) {
           if (shouldEmitPreview) {
             const message = head === null ? "Head not detected" : `Eyes detected: ${eyes.length}`;
-            emitPreview(frame, head, eyes, mouth, message, null, previewWidthRatio, emit);
+            previewMs = emitPreview(frame, head, eyes, mouth, message, null, previewWidthRatio, emit);
             lastPreview = now;
           }
           throw new Error(head === null ? "Head was not detected" : "Two eyes were not detected");
@@ -143,7 +168,7 @@ export async function startWebRuntime(
           }
         }
         if (shouldEmitPreview) {
-          emitPreview(frame, head, eyes, mouth, null, [gaze.yawDeg, gaze.pitchDeg], previewWidthRatio, emit);
+          previewMs = emitPreview(frame, head, eyes, mouth, null, [gaze.yawDeg, gaze.pitchDeg], previewWidthRatio, emit);
           lastPreview = now;
         }
         const distanceM = projector.distanceFromHead(head, headFaceWidthRatio);
@@ -191,6 +216,12 @@ export async function startWebRuntime(
           gaze_inference_ms: gazeInferenceMs,
           lip_motion_inference_ms: lipMotionInferenceMs,
           inference_ms: detectInferenceMs + gazeInferenceMs + (lipMotionInferenceMs ?? 0),
+          capture_ms: captureMs,
+          preview_ms: previewMs,
+          frame_interval_ms: frameIntervalMs,
+          processed_fps: processedFps,
+          dropped_frames: 0,
+          main_thread_long_tasks: longTasks.count(),
           yaw_deg: gaze.yawDeg,
           pitch_deg: gaze.pitchDeg
         };
@@ -296,7 +327,174 @@ export async function startWebRuntime(
     captureCalibration: (target) => captureCalibration(calibration, latestRaw, target, emit, config),
     stop: () => {
       stopped = true;
+      longTasks.stop();
       models?.dispose();
+      for (const track of stream?.getTracks() ?? []) {
+        track.stop();
+      }
+    }
+  };
+}
+
+function createLongTaskCounter(): { count(): number; stop(): void } {
+  let count = 0;
+  let observer: PerformanceObserver | null = null;
+  try {
+    observer = new PerformanceObserver((list) => {
+      count += list.getEntries().length;
+    });
+    observer.observe({ entryTypes: ["longtask"] });
+  } catch {
+    observer = null;
+  }
+  return {
+    count: () => count,
+    stop: () => observer?.disconnect()
+  };
+}
+
+type WorkerToMainMessage =
+  | { type: "ready" }
+  | { type: "frame_done" }
+  | { type: "backend"; payload: BackendMessage }
+  | { type: "calibration_read"; id: number; path: string }
+  | { type: "calibration_write"; id: number; path: string; payload: unknown };
+
+type MainToWorkerMessage =
+  | { type: "init"; config: WebInferenceConfig }
+  | {
+      type: "frame";
+      data: Uint8ClampedArray<ArrayBuffer>;
+      width: number;
+      height: number;
+      captureMs: number;
+      frameIntervalMs?: number;
+      droppedFrames: number;
+      mainThreadLongTasks: number;
+    }
+  | { type: "capture_calibration"; target: [number, number] }
+  | { type: "stop" }
+  | {
+      type: "calibration_read_result";
+      id: number;
+      response: { ok: true; text: string | null } | { ok: false; error: string };
+    }
+  | {
+      type: "calibration_write_result";
+      id: number;
+      response: { ok: true; path: string } | { ok: false; error: string };
+    };
+
+async function startDedicatedWorkerRuntime(
+  config: WebInferenceConfig,
+  emit: (payload: BackendMessage) => void
+): Promise<WebRuntimeController> {
+  let stopped = false;
+  let stream: MediaStream | null = null;
+  let inFlight = false;
+  let droppedFrames = 0;
+  let lastCapture = 0;
+  let captureTimer: number | null = null;
+  const longTasks = createLongTaskCounter();
+  const worker = new InferenceWorker();
+
+  const post = (message: MainToWorkerMessage, transfer?: Transferable[]) => {
+    worker.postMessage(message, transfer ?? []);
+  };
+
+  worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
+    const message = event.data;
+    if (message.type === "backend") {
+      emit(message.payload);
+    } else if (message.type === "frame_done") {
+      inFlight = false;
+    } else if (message.type === "calibration_read") {
+      window.gazeBridge.readCalibration(message.path).then((response) => {
+        post({ type: "calibration_read_result", id: message.id, response });
+      });
+    } else if (message.type === "calibration_write") {
+      window.gazeBridge.writeCalibration(message.path, message.payload).then((response) => {
+        post({ type: "calibration_write_result", id: message.id, response });
+      });
+    }
+  };
+  worker.onerror = (event) => {
+    emit({
+      type: "status",
+      level: "error",
+      message: `Inference worker error: ${event.message}`,
+      runtime: config.runtime,
+      logged: true
+    });
+  };
+
+  post({ type: "init", config: { ...config, assetBaseUrl: window.location.href } });
+
+  try {
+    const camera = await openCamera(config.camera, config.cameraWidth, config.cameraHeight);
+    stream = camera.stream;
+    const video = camera.video;
+    const canvas = document.createElement("canvas");
+    canvas.width = config.cameraWidth;
+    canvas.height = config.cameraHeight;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) {
+      throw new Error("2D canvas context is not available");
+    }
+
+    const captureLoop = () => {
+      if (stopped) {
+        return;
+      }
+      if (inFlight) {
+        droppedFrames += 1;
+      } else {
+        const captureStart = performance.now();
+        ctx.drawImage(video, 0, 0, config.cameraWidth, config.cameraHeight);
+        const frame = ctx.getImageData(0, 0, config.cameraWidth, config.cameraHeight);
+        const now = performance.now();
+        const frameIntervalMs = lastCapture > 0 ? now - lastCapture : undefined;
+        lastCapture = now;
+        inFlight = true;
+        post(
+          {
+            type: "frame",
+            data: frame.data,
+            width: frame.width,
+            height: frame.height,
+            captureMs: now - captureStart,
+            frameIntervalMs,
+            droppedFrames,
+            mainThreadLongTasks: longTasks.count()
+          },
+          [frame.data.buffer]
+        );
+      }
+      captureTimer = window.setTimeout(captureLoop, 33);
+    };
+    captureLoop();
+  } catch (error) {
+    emit({
+      type: "status",
+      level: "error",
+      message: error instanceof Error ? error.message : String(error),
+      runtime: config.runtime,
+      logged: true
+    });
+  }
+
+  return {
+    captureCalibration: async (target) => {
+      post({ type: "capture_calibration", target });
+    },
+    stop: () => {
+      stopped = true;
+      if (captureTimer !== null) {
+        window.clearTimeout(captureTimer);
+      }
+      longTasks.stop();
+      post({ type: "stop" });
+      worker.terminate();
       for (const track of stream?.getTracks() ?? []) {
         track.stop();
       }
@@ -413,10 +611,11 @@ function emitPreview(
   gazeAngles: [number, number] | null,
   widthRatio: number | null,
   emit: (payload: BackendMessage) => void
-): void {
+): number {
+  const start = performance.now();
   const image = createPreviewImage(frame, head, eyes, mouth, message, widthRatio, gazeAngles ?? undefined);
   if (!image) {
-    return;
+    return performance.now() - start;
   }
   emit({
     type: "preview",
@@ -425,4 +624,5 @@ function emitPreview(
     eye_count: eyes.length,
     width_ratio: widthRatio
   });
+  return performance.now() - start;
 }

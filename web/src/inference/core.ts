@@ -132,6 +132,11 @@ export interface CalibrationPayload {
   samples?: Array<{ raw: [number, number]; target: [number, number] }>;
 }
 
+export interface CalibrationIO {
+  read(path: string): Promise<{ ok: true; text: string | null } | { ok: false; error: string }>;
+  write(path: string, payload: unknown): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+}
+
 export function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -1021,14 +1026,21 @@ export class Calibration {
   sourceMax: [number, number] | null = null;
   readonly sourceMargin = 0.08;
   readonly samples: Array<[[number, number], [number, number]]> = [];
+  readonly io: CalibrationIO;
 
   constructor(
     readonly path: string,
-    readonly emit: (payload: BackendMessage) => void
-  ) {}
+    readonly emit: (payload: BackendMessage) => void,
+    io?: CalibrationIO
+  ) {
+    this.io = io ?? {
+      read: (filePath) => window.gazeBridge.readCalibration(filePath),
+      write: (filePath, payload) => window.gazeBridge.writeCalibration(filePath, payload)
+    };
+  }
 
   async load(): Promise<void> {
-    const response = await window.gazeBridge.readCalibration(this.path);
+    const response = await this.io.read(this.path);
     if (!response.ok) {
       this.emit({ type: "status", level: "warning", message: `Failed to load calibration: ${response.error}` });
       return;
@@ -1094,7 +1106,7 @@ export class Calibration {
       },
       samples: recent.map(([sample, sampleTarget]) => ({ raw: sample, target: sampleTarget }))
     };
-    const response = await window.gazeBridge.writeCalibration(this.path, payload);
+    const response = await this.io.write(this.path, payload);
     if (response.ok) {
       console.info("Calibration saved", JSON.stringify({ path: response.path }));
       this.emit({ type: "calibration", status: "saved", path: response.path });

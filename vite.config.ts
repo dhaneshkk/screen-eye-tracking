@@ -3,6 +3,12 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  experimental: {
+    bundledDev: true
+  },
+  worker: {
+    format: "iife"
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true
