@@ -262,6 +262,8 @@ The PiP preview in the upper-right corner shows the camera image and detection s
 
 External API access is disabled unless `--external-api` is passed. When enabled, the Electron main process exposes the latest internal state for local applications:
 
+https://github.com/user-attachments/assets/345e7fd9-540b-47b5-a2e6-69a25d1e7a54
+
 ```bash
 pnpm dev -- \
 --backend cuda \
@@ -555,8 +557,6 @@ Result sample.
 ```
 
 The WebSocket sends a `snapshot` event on connect and `update` events after state changes. The snapshot uses `schema_version: 1` and includes latest-known `runtime`, `display`, `camera`, `gaze`, `calibration`, `models`, `status`, and preview metadata. Preview image data is intentionally omitted from the external snapshot.
-
-https://github.com/user-attachments/assets/345e7fd9-540b-47b5-a2e6-69a25d1e7a54
 
 Snapshot fields are latest-known values. Slices can be `null` before the app has enough data, and fields that are not known yet are omitted from JSON responses.
 
