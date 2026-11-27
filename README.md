@@ -243,6 +243,9 @@ pnpm dev -- \
 - `--external-api`: Starts a read-only local HTTP/WebSocket API for external applications. Disabled by default.
 - `--external-api-host`: Host for `--external-api`. Default: `127.0.0.1`.
 - `--external-api-port`: Port for `--external-api`. Default: `47892`.
+- `--external-api-allow-origin`: Comma-separated browser origins allowed to use the API, e.g. `http://localhost:3000`. By default any request carrying an `Origin` header (that is, any web page) is rejected with `403`; native clients such as `curl`, `websocat` or Python send no `Origin` and are unaffected.
+- `--external-api-token`: Optional shared secret (or set `GAZE_EXTERNAL_API_TOKEN`). When set, clients must send `Authorization: Bearer <token>`, or `?token=<token>` on the WebSocket URL. Strongly recommended if `--external-api-host` is not a loopback address.
+- `--gpu-sandbox`: With `--runtime onnxweb` / `litert`, keep Chromium's GPU sandbox enabled. The WebGPU switches (`disable-gpu-sandbox`, `enable-unsafe-webgpu`, `ignore-gpu-blocklist`, ...) are now applied only for these web runtimes, never for `--runtime python`.
 - `--hide-preview`: Hides the PiP camera preview.
 - `--no-flip-x`: Disables horizontal gaze point flip correction. By default the screen x coordinate is flipped.
 - `--no-flip-y`: Disables vertical pitch flip correction for the gaze model output. The parallel translation correction from the face/eye camera-space Y position is not flipped.
@@ -260,7 +263,7 @@ The PiP preview in the upper-right corner shows the camera image and detection s
 
 ## External Read-Only API
 
-External API access is disabled unless `--external-api` is passed. When enabled, the Electron main process exposes the latest internal state for local applications:
+External API access is disabled unless `--external-api` is passed. On a loopback host the API also rejects requests whose `Host` header is not `localhost` / `127.0.0.1` / `[::1]` (DNS-rebinding protection). When enabled, the Electron main process exposes the latest internal state for local applications:
 
 https://github.com/user-attachments/assets/345e7fd9-540b-47b5-a2e6-69a25d1e7a54
 

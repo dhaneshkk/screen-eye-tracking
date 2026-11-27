@@ -6,6 +6,7 @@ const { mouse, Button, Point } = require("@nut-tree-fork/nut-js");
 const { startExternalApiServer } = require("./externalApi.cjs");
 const { GazeStateStore } = require("./externalStore.cjs");
 const { createLipClickController } = require("./lipClickController.cjs");
+const { resolveAllowedCalibrationPath } = require("./calibrationPath.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const defaultCalibrationFile = path.join(repoRoot, ".gaze_calibration.json");
@@ -34,10 +35,12 @@ const gazeStateStore = new GazeStateStore({
   }
 });
 
-function appendGpuSwitches() {
+function appendGpuSwitches({ keepGpuSandbox = false } = {}) {
   app.commandLine.appendSwitch("ignore-gpu-blocklist");
   app.commandLine.appendSwitch("enable-zero-copy");
-  app.commandLine.appendSwitch("disable-gpu-sandbox");
+  if (!keepGpuSandbox) {
+    app.commandLine.appendSwitch("disable-gpu-sandbox");
+  }
   app.commandLine.appendSwitch("enable-unsafe-webgpu");
   app.commandLine.appendSwitch("enable-webgpu-developer-features");
   const features =
@@ -51,11 +54,16 @@ function appendGpuSwitches() {
   app.commandLine.appendSwitch("disable-features", "UseSkiaRenderer,UseChromeOSDirectVideoDecoder");
 }
 
-appendGpuSwitches();
-
 function cliArgs() {
   const args = process.argv.slice(2);
   return args.filter((arg) => arg !== ".");
+}
+
+// WebGPU/zero-copy switches are only needed when inference runs in the renderer. With the
+// default Python runtime the renderer only draws the overlay, so keep Chromium's GPU sandbox
+// and blocklist intact. `--gpu-sandbox` keeps the sandbox on even for web runtimes.
+if (resolveRuntime(cliArgs()) !== "python") {
+  appendGpuSwitches({ keepGpuSandbox: hasFlag(cliArgs(), "--gpu-sandbox") });
 }
 
 function readOption(args, name, fallback) {
@@ -377,10 +385,17 @@ function maybeStartExternalApi(args) {
   }
   const host = readOption(args, "--external-api-host", "127.0.0.1");
   const port = readPortOption(args, "--external-api-port", 47892);
+  const allowedOrigins = (readOption(args, "--external-api-allow-origin", "") || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const token = readOption(args, "--external-api-token", null) || process.env.GAZE_EXTERNAL_API_TOKEN || null;
   externalApi = startExternalApiServer({
     store: gazeStateStore,
     host,
     port,
+    allowedOrigins,
+    token,
     logger: console
   });
 }
@@ -677,8 +692,18 @@ function startBackend(args, displayBounds) {
 
 ipcMain.handle("get-config", () => rendererConfig);
 
+// The renderer may only touch the calibration file chosen on the command line; it never needs
+// an arbitrary path, and accepting one would let renderer-side code read or overwrite any file.
+function allowedCalibrationPath(filePath) {
+  const configured = readOption(cliArgs(), "--calibration-file", defaultCalibrationFile);
+  return resolveAllowedCalibrationPath(filePath, configured, repoRoot);
+}
+
 ipcMain.handle("read-calibration", async (_event, filePath) => {
-  const resolved = resolveRepoPath(filePath || defaultCalibrationFile);
+  const resolved = allowedCalibrationPath(filePath);
+  if (!resolved) {
+    return { ok: false, error: "calibration path is not the configured --calibration-file" };
+  }
   try {
     const text = await fs.promises.readFile(resolved, "utf8");
     return { ok: true, text };
@@ -691,7 +716,10 @@ ipcMain.handle("read-calibration", async (_event, filePath) => {
 });
 
 ipcMain.handle("write-calibration", async (_event, filePath, payload) => {
-  const resolved = resolveRepoPath(filePath || defaultCalibrationFile);
+  const resolved = allowedCalibrationPath(filePath);
+  if (!resolved) {
+    return { ok: false, error: "calibration path is not the configured --calibration-file" };
+  }
   try {
     await fs.promises.writeFile(resolved, JSON.stringify(payload, null, 2), "utf8");
     const message = { type: "calibration", status: "saved", path: resolved };
