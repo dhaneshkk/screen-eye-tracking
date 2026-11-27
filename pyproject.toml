@@ -19,3 +19,7 @@ gaze-backend = "screen_eye_tracking.backend:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/screen_eye_tracking"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]

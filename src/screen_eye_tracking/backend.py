@@ -39,6 +39,8 @@ YOLO_INPUT_HEIGHT = 480
 YOLO_CLASS_COUNT = 28
 YOLO_EYE_SCORE_THRESHOLD = 0.20
 YOLO_NMS_IOU_THRESHOLD = 0.45
+# Pre-NMS cap per class. Bounds worst-case NMS cost; only the top few detections are ever used.
+YOLO_MAX_NMS_CANDIDATES = 1000
 LIP_MOTION_INPUT_WIDTH = 48
 LIP_MOTION_INPUT_HEIGHT = 30
 LIP_MOTION_OPEN_THRESHOLD = 0.50
@@ -305,6 +307,42 @@ def select_best_in_head(head: Detection, detections: Iterable[Detection]) -> Det
     return max(candidates, key=lambda det: det.score)
 
 
+def _decode_yolo_class(
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    class_id: int,
+    score_threshold: float,
+    iou_threshold: float,
+) -> list[Detection]:
+    """Threshold, cap to the top-k scores and run greedy NMS for one class (vectorized)."""
+    keep = np.isfinite(scores) & (scores >= score_threshold)
+    if not np.any(keep):
+        return []
+    idx = np.flatnonzero(keep)
+    # Stable sort reproduces the original `sorted(..., reverse=True)` tie order (anchor index).
+    order = idx[np.argsort(-scores[idx], kind="stable")][:YOLO_MAX_NMS_CANDIDATES]
+    cand = boxes[order]
+    cand_scores = scores[order]
+    areas = np.maximum(0.0, cand[:, 2] - cand[:, 0]) * np.maximum(0.0, cand[:, 3] - cand[:, 1])
+    alive = np.ones(len(order), dtype=bool)
+    selected: list[Detection] = []
+    for i in range(len(order)):
+        if not alive[i]:
+            continue
+        x1, y1, x2, y2 = cand[i]
+        selected.append(Detection(class_id, float(cand_scores[i]), float(x1), float(y1), float(x2), float(y2)))
+        rest = np.flatnonzero(alive[i + 1 :]) + i + 1
+        if rest.size == 0:
+            break
+        iw = np.maximum(0.0, np.minimum(x2, cand[rest, 2]) - np.maximum(x1, cand[rest, 0]))
+        ih = np.maximum(0.0, np.minimum(y2, cand[rest, 3]) - np.maximum(y1, cand[rest, 1]))
+        inter = iw * ih
+        union = areas[i] + areas[rest] - inter
+        iou = np.where(union > 0.0, inter / np.where(union > 0.0, union, 1.0), 0.0)
+        alive[rest[iou > iou_threshold]] = False
+    return selected
+
+
 def parse_yolo_output(
     output: np.ndarray,
     score_threshold: float,
@@ -319,39 +357,30 @@ def parse_yolo_output(
     if values.ndim != 2 or values.shape[0] != 4 + YOLO_CLASS_COUNT:
         raise ValueError(f"Unexpected YOLO output shape: {tuple(values.shape)}")
 
+    # float64 matches the original per-anchor Python-float arithmetic bit-for-bit.
+    values64 = values.astype(np.float64)
+    cx, cy, box_w, box_h = values64[0], values64[1], values64[2], values64[3]
     scale_x = float(image_w) / float(input_w)
     scale_y = float(image_h) / float(input_h)
-    heads: list[Detection] = []
-    eyes: list[Detection] = []
-    mouths: list[Detection] = []
-    for index in range(values.shape[1]):
-        cx = float(values[0, index])
-        cy = float(values[1, index])
-        box_w = float(values[2, index])
-        box_h = float(values[3, index])
-        if not all(math.isfinite(v) for v in (cx, cy, box_w, box_h)) or box_w <= 0.0 or box_h <= 0.0:
-            continue
-        x1 = max(0.0, min(float(image_w - 1), (cx - box_w * 0.5) * scale_x))
-        y1 = max(0.0, min(float(image_h - 1), (cy - box_h * 0.5) * scale_y))
-        x2 = max(0.0, min(float(image_w - 1), (cx + box_w * 0.5) * scale_x))
-        y2 = max(0.0, min(float(image_h - 1), (cy + box_h * 0.5) * scale_y))
-        if x2 <= x1 or y2 <= y1:
-            continue
-        head_score = float(values[4 + HEAD_CLASS_ID, index])
-        if math.isfinite(head_score) and head_score >= score_threshold:
-            heads.append(Detection(HEAD_CLASS_ID, head_score, x1, y1, x2, y2))
-        eye_score = float(values[4 + EYE_CLASS_ID, index])
-        if math.isfinite(eye_score) and eye_score >= YOLO_EYE_SCORE_THRESHOLD:
-            eyes.append(Detection(EYE_CLASS_ID, eye_score, x1, y1, x2, y2))
-        mouth_score = float(values[4 + MOUTH_CLASS_ID, index])
-        if math.isfinite(mouth_score) and mouth_score >= score_threshold:
-            mouths.append(Detection(MOUTH_CLASS_ID, mouth_score, x1, y1, x2, y2))
+    with np.errstate(invalid="ignore", over="ignore"):
+        valid = np.isfinite(cx) & np.isfinite(cy) & np.isfinite(box_w) & np.isfinite(box_h) & (box_w > 0.0) & (box_h > 0.0)
+        x1 = np.clip((cx - box_w * 0.5) * scale_x, 0.0, float(image_w - 1))
+        y1 = np.clip((cy - box_h * 0.5) * scale_y, 0.0, float(image_h - 1))
+        x2 = np.clip((cx + box_w * 0.5) * scale_x, 0.0, float(image_w - 1))
+        y2 = np.clip((cy + box_h * 0.5) * scale_y, 0.0, float(image_h - 1))
+        valid &= (x2 > x1) & (y2 > y1)
+    boxes = np.stack([x1, y1, x2, y2], axis=1)
 
-    heads = nms_detections(heads, YOLO_NMS_IOU_THRESHOLD)
-    eyes = nms_detections(eyes, YOLO_NMS_IOU_THRESHOLD)
-    mouths = nms_detections(mouths, YOLO_NMS_IOU_THRESHOLD)
+    def class_scores(class_id: int) -> np.ndarray:
+        scores = values64[4 + class_id].copy()
+        scores[~valid] = -np.inf
+        return scores
+
+    heads = _decode_yolo_class(boxes, class_scores(HEAD_CLASS_ID), HEAD_CLASS_ID, score_threshold, YOLO_NMS_IOU_THRESHOLD)
     if not heads:
         return DetectionResult(None, [])
+    eyes = _decode_yolo_class(boxes, class_scores(EYE_CLASS_ID), EYE_CLASS_ID, YOLO_EYE_SCORE_THRESHOLD, YOLO_NMS_IOU_THRESHOLD)
+    mouths = _decode_yolo_class(boxes, class_scores(MOUTH_CLASS_ID), MOUTH_CLASS_ID, score_threshold, YOLO_NMS_IOU_THRESHOLD)
     head = heads[0]
     return DetectionResult(head, select_eye_pair(head, eyes), select_best_in_head(head, mouths))
 
@@ -815,10 +844,13 @@ class ScreenProjector:
     def _normalize_hit_m(self, hit_m: tuple[float, float]) -> tuple[float, float]:
         display_w_m, display_h_m = self.display.size_m
         hit_x_m, hit_y_m = hit_m
-        x_norm = clamp01(hit_x_m / display_w_m)
+        x_norm = hit_x_m / display_w_m
         if self.flip_x:
-            x_norm = 1.0 - x_norm
-        return x_norm, clamp01(hit_y_m / display_h_m)
+            # Mirror only the camera-relative offset. The camera's own screen position is a
+            # fixed point of the flip, so an off-center webcam (camera_screen_x != 0.5) still
+            # maps "looking into the lens" to the lens position. Identical to `1 - x` at 0.5.
+            x_norm = 2.0 * self.camera_screen_x - x_norm
+        return clamp01(x_norm), clamp01(hit_y_m / display_h_m)
 
     def _gaze_direction(self, yaw_deg: float, pitch_deg: float) -> np.ndarray:
         pitch_tan = math.tan(math.radians(pitch_deg))
@@ -875,7 +907,17 @@ class ScreenProjector:
             return "binocular-convergence produced a non-finite point"
         if midpoint[2] <= 0.0 or midpoint[2] > distance_m * 3.0:
             return "binocular-convergence depth is outside the expected range"
-        return float(midpoint[0]), float(midpoint[1])
+        # The vergence point lies at depth midpoint[2], which is generally NOT the screen plane
+        # (vergence depth from webcam gaze is very noisy). Use it only to define the cyclopean
+        # gaze direction, then intersect that ray with the screen plane z = distance_m.
+        cyclopean = (p1 + p2) * 0.5
+        direction = midpoint - cyclopean
+        if direction[2] <= 1.0e-9:
+            return "binocular-convergence produced a degenerate cyclopean ray"
+        hit = cyclopean + direction * (distance_m / direction[2])
+        if not np.all(np.isfinite(hit)):
+            return "binocular-convergence produced a non-finite point"
+        return float(hit[0]), float(hit[1])
 
 
 def display_size_arg(value: str) -> float:
