@@ -705,7 +705,7 @@ type UpdateEvent = {
 
 When RetinaFace is used, distance estimation still needs the `16cm` Head-width assumption. RetinaFace Face width is narrower than Head width, so the static source constant `RETINAFACE_HEAD_FACE_WIDTH_RATIO = 1.545` converts Face width to Head-equivalent width before distance estimation. The current ratio is shown in the lower-right status area and the PiP preview.
 
-Experimental binocular projection modes can be selected with `--gaze-projection-mode`. `legacy` keeps the original behavior, averaging the left/right eye gaze angles before projection. `binocular-screen` projects each eye separately to the screen plane and averages the two hit points. `binocular-convergence` estimates the closest point between the left/right gaze rays and uses that point as the screen hit position; if the rays are unstable, it falls back to `legacy`.
+Experimental binocular projection modes can be selected with `--gaze-projection-mode`. `legacy` keeps the original behavior, averaging the left/right eye gaze angles before projection. `binocular-screen` projects each eye separately to the screen plane and averages the two hit points. `binocular-convergence` estimates the closest point between the left/right gaze rays, uses it to define the cyclopean (mid-eye) gaze direction, and intersects that ray with the screen plane, so vergence-depth noise does not shift the hit point; if the rays are unstable, it falls back to `legacy`.
 
 These binocular modes are approximations from the model's per-eye yaw/pitch and 2D eye positions, not a true optical vergence measurement. Because the raw point distribution can change between modes, use a separate calibration file when comparing them:
 

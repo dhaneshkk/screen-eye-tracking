@@ -570,8 +570,12 @@ function detectionIou(a: Detection, b: Detection): number {
   return union > 0 ? intersection / union : 0;
 }
 
+// Pre-NMS cap per class; mirrors YOLO_MAX_NMS_CANDIDATES in backend.py.
+export const YOLO_MAX_NMS_CANDIDATES = 1000;
+
 function nmsDetections(detections: Detection[], iouThreshold: number): Detection[] {
-  const remaining = [...detections].sort((a, b) => b.score - a.score);
+  // Array.prototype.sort is stable, so ties keep anchor order (same as the Python backend).
+  const remaining = [...detections].sort((a, b) => b.score - a.score).slice(0, YOLO_MAX_NMS_CANDIDATES);
   const selected: Detection[] = [];
   while (remaining.length > 0) {
     const current = remaining.shift() as Detection;
@@ -935,11 +939,13 @@ export class ScreenProjector {
 
   private normalizeHitM(hitM: [number, number]): [number, number] {
     const [displayWM, displayHM] = this.display.sizeM;
-    let xNorm = clamp01(hitM[0] / displayWM);
+    let xNorm = hitM[0] / displayWM;
     if (this.flipX) {
-      xNorm = 1 - xNorm;
+      // Mirror only the camera-relative offset: the camera position is a fixed point of the
+      // flip, so off-center webcams stay correct. Identical to `1 - x` when cameraScreenX = 0.5.
+      xNorm = 2 * this.cameraScreenX - xNorm;
     }
-    return [xNorm, clamp01(hitM[1] / displayHM)];
+    return [clamp01(xNorm), clamp01(hitM[1] / displayHM)];
   }
 
   private gazeDirection(yawDeg: number, pitchDeg: number): [number, number, number] {
@@ -1012,7 +1018,23 @@ export class ScreenProjector {
     if (midpoint[2] <= 0 || midpoint[2] > distanceM * 3) {
       return "binocular-convergence depth is outside the expected range";
     }
-    return [midpoint[0], midpoint[1]];
+    // The vergence point lies at depth midpoint[2], which is generally NOT the screen plane.
+    // Use it only for the cyclopean gaze direction and intersect that ray with z = distanceM.
+    const cyclopean: [number, number, number] = [(p1[0] + p2[0]) * 0.5, (p1[1] + p2[1]) * 0.5, 0];
+    const direction: [number, number, number] = [
+      midpoint[0] - cyclopean[0],
+      midpoint[1] - cyclopean[1],
+      midpoint[2] - cyclopean[2]
+    ];
+    if (direction[2] <= 1e-9) {
+      return "binocular-convergence produced a degenerate cyclopean ray";
+    }
+    const scale = distanceM / direction[2];
+    const hit: [number, number] = [cyclopean[0] + direction[0] * scale, cyclopean[1] + direction[1] * scale];
+    if (!hit.every(Number.isFinite)) {
+      return "binocular-convergence produced a non-finite point";
+    }
+    return hit;
   }
 }
 
